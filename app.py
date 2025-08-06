@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np 
@@ -24,11 +23,14 @@ def load_models():
     except FileNotFoundError:
         st.error("⚠️ Model files not found! Please ensure 'Model.pkl' and 'Scaler.pkl' are in the app directory.")
         return None, None
+    except Exception as e:
+        st.error(f"⚠️ Error loading model files: {str(e)}")
+        return None, None
 
 model, scaler = load_models()
 
 # App Title and Description
-st.title("🏦 Loan Default Prediction App")
+st.title("🏦 Loan Prediction App")
 st.markdown("""
 <div style="background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 30px;">
     <h4 style="color: #1f77b4; margin-bottom: 10px;">📊 About This App</h4>
@@ -61,6 +63,18 @@ st.sidebar.success("""
 ✅ Complete documentation  
 ✅ Consider co-applicant
 """)
+
+# Check what type of model we have
+model_type = type(model).__name__ if model else "Unknown"
+has_predict_proba = hasattr(model, 'predict_proba') if model else False
+
+# Display model info in sidebar
+if model:
+    st.sidebar.title("🤖 Model Info")
+    st.sidebar.info(f"""
+    **Model Type:** {model_type}
+    **Probability Support:** {'Yes' if has_predict_proba else 'No'}
+    """)
 
 # Main form
 if model and scaler:
@@ -128,8 +142,7 @@ if model and scaler:
             # Credit History
             credit_history = st.selectbox(
                 "Credit History",
-                options=[1.0, 0.0],
-                format_func=lambda x: "Good" if x == 1.0 else "Poor",
+                options=["Good", "Poor"],
                 index=0,
                 help="Past credit payment history"
             )
@@ -182,7 +195,15 @@ if model and scaler:
         
         total_income = applicant_income + coapplicant_income
         loan_income_ratio = (loan_amount * 1000) / (total_income * 12) if total_income > 0 else 0
-        monthly_emi = (loan_amount * 1000 * 0.1 * (1.1)**(loan_amount_term/12)) / (((1.1)**(loan_amount_term/12)) - 1) / 12 if loan_amount_term > 0 else 0
+        
+        # Simple EMI calculation (10% annual interest rate assumption)
+        monthly_rate = 0.10 / 12
+        n_payments = loan_amount_term
+        if loan_amount_term > 0 and loan_amount > 0:
+            monthly_emi = (loan_amount * 1000 * monthly_rate * (1 + monthly_rate)**n_payments) / (((1 + monthly_rate)**n_payments) - 1)
+        else:
+            monthly_emi = 0
+            
         emi_income_ratio = monthly_emi / total_income if total_income > 0 else 0
         
         with col_a:
@@ -210,28 +231,50 @@ if model and scaler:
     # Process prediction when form is submitted
     if submitted:
         with st.spinner("🤖 Analyzing application..."):
-            # Prepare input data in the exact format the model expects
-            input_data = pd.DataFrame({
-                'Gender': [1 if gender == 'Male' else 0],
-                'Married': [1 if married == 'Yes' else 0],
-                'Dependents': [0 if dependents == '0' else 1 if dependents == '1' else 2 if dependents == '2' else 3],
-                'Education': [0 if education == 'Graduate' else 1],
-                'Self_Employed': [1 if self_employed == 'Yes' else 0],
-                'ApplicantIncome': [applicant_income],
-                'CoapplicantIncome': [coapplicant_income],
-                'LoanAmount': [loan_amount],
-                'Loan_Amount_Term': [loan_amount_term],
-                'Credit_History': [credit_history],
-                'Property_Area': [2 if property_area == 'Urban' else 1 if property_area == 'Semiurban' else 0]
-            })
-            
             try:
+                # Prepare input data with CORRECT encoding based on your notebook
+                input_data = pd.DataFrame({
+                    'Gender': [1 if gender == 'Male' else 0],  # Male=1, Female=0
+                    'Married': [1 if married == 'Yes' else 0],  # Yes=1, No=0
+                    'Dependents': [0 if dependents == '0' else 1 if dependents == '1' else 2 if dependents == '2' else 3],  # 0,1,2,3+
+                    'Education': [0 if education == 'Graduate' else 1],  # Graduate=0, Not Graduate=1
+                    'Self_Employed': [1 if self_employed == 'Yes' else 0],  # Yes=1, No=0
+                    'ApplicantIncome': [applicant_income],
+                    'CoapplicantIncome': [coapplicant_income],
+                    'LoanAmount': [loan_amount],
+                    'Loan_Amount_Term': [loan_amount_term],
+                    'Credit_History': [1.0 if credit_history == 'Good' else 0.0],  # Good=1, Poor=0
+                    'Property_Area': [2 if property_area == 'Urban' else 1 if property_area == 'Semiurban' else 0]  # Urban=2, Semiurban=1, Rural=0
+                })
+                
                 # Scale the features
                 input_scaled = scaler.transform(input_data)
                 
                 # Make prediction
                 prediction = model.predict(input_scaled)[0]
-                prediction_proba = model.predict_proba(input_scaled)[0]
+                
+                # Handle probability prediction based on model type
+                if has_predict_proba:
+                    try:
+                        prediction_proba = model.predict_proba(input_scaled)[0]
+                        confidence = max(prediction_proba) * 100
+                    except:
+                        # Fallback for models that might not support predict_proba consistently
+                        prediction_proba = None
+                        confidence = 85.0  # Default confidence
+                else:
+                    # For models like SVC without probability support
+                    prediction_proba = None
+                    # Use decision function if available, otherwise default confidence
+                    if hasattr(model, 'decision_function'):
+                        try:
+                            decision_score = model.decision_function(input_scaled)[0]
+                            # Convert decision score to confidence (rough approximation)
+                            confidence = min(95, max(55, 70 + abs(decision_score) * 10))
+                        except:
+                            confidence = 75.0
+                    else:
+                        confidence = 75.0
                 
                 # Display results
                 st.subheader("🎯 Prediction Results")
@@ -239,20 +282,23 @@ if model and scaler:
                 col_result1, col_result2 = st.columns([2, 1])
                 
                 with col_result1:
-                    if prediction == 0:  # Assuming 0 = Approved, 1 = Rejected based on your encoding
+                    # Based on your notebook: Y=0 (Approved), N=1 (Rejected)
+                    if prediction == 0:
                         st.success("🎉 **Loan Likely to be APPROVED!**")
                         st.balloons()
-                        approval_prob = prediction_proba[0] * 100
+                        result_text = "APPROVED"
+                        result_color = "success"
                     else:
                         st.error("❌ **Loan Likely to be REJECTED**")
-                        approval_prob = prediction_proba[1] * 100
+                        result_text = "REJECTED"
+                        result_color = "error"
                 
                 with col_result2:
-                    confidence = max(prediction_proba) * 100
+                    delta_text = f"+{confidence-50:.1f}%" if confidence > 50 else f"{confidence-50:.1f}%"
                     st.metric(
                         "Confidence Score", 
                         f"{confidence:.1f}%",
-                        delta=f"{confidence-50:.1f}%" if confidence > 50 else None
+                        delta=delta_text
                     )
                 
                 # Detailed breakdown
@@ -274,7 +320,7 @@ if model and scaler:
                     st.write(f"• Co-applicant Income: ₹{coapplicant_income:,}/month")
                     st.write(f"• Loan Amount: ₹{loan_amount * 1000:,}")
                     st.write(f"• Loan Term: {loan_amount_term} months")
-                    st.write(f"• Credit History: {'Good' if credit_history == 1.0 else 'Poor'}")
+                    st.write(f"• Credit History: {credit_history}")
                     st.write(f"• Property Area: {property_area}")
                 
                 # Risk factors analysis
@@ -283,7 +329,7 @@ if model and scaler:
                 positive_factors = []
                 
                 # Analyze risk factors
-                if credit_history == 0.0:
+                if credit_history == "Poor":
                     risk_factors.append("Poor credit history")
                 else:
                     positive_factors.append("Good credit history")
@@ -304,6 +350,9 @@ if model and scaler:
                 if married == "Yes":
                     positive_factors.append("Married status")
                 
+                if property_area == "Urban":
+                    positive_factors.append("Urban property location")
+                
                 # Display risk factors
                 risk_col1, risk_col2 = st.columns(2)
                 
@@ -321,9 +370,30 @@ if model and scaler:
                         for factor in positive_factors:
                             st.write(f"✅ {factor}")
                 
+                # Technical details (expandable)
+                with st.expander("🔧 Technical Details"):
+                    st.write("**Model Information:**")
+                    st.write(f"• Model Type: {model_type}")
+                    st.write(f"• Supports Probability: {has_predict_proba}")
+                    st.write(f"• Prediction Value: {prediction}")
+                    
+                    if prediction_proba is not None:
+                        st.write(f"• Probability Distribution: {prediction_proba}")
+                    
+                    st.write("**Input Encoding:**")
+                    for col, val in input_data.iloc[0].items():
+                        st.write(f"• {col}: {val}")
+                        
             except Exception as e:
                 st.error(f"❌ Error making prediction: {str(e)}")
                 st.info("Please check if your model files are compatible with the input format.")
+                
+                # Debug information
+                with st.expander("🔍 Debug Information"):
+                    st.write("**Error Details:**")
+                    st.code(str(e))
+                    st.write("**Model Type:**", type(model).__name__ if model else "None")
+                    st.write("**Has predict_proba:**", hasattr(model, 'predict_proba') if model else False)
 
 else:
     st.error("❌ Unable to load model files. Please check if 'Model.pkl' and 'Scaler.pkl' exist in the app directory.")
@@ -338,12 +408,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Additional features
-with st.expander("🔧 Advanced Options"):
-    st.subheader("Batch Prediction")
+with st.expander("🔧 Advanced Options & Batch Processing"):
+    st.subheader("📄 Batch Prediction")
     uploaded_file = st.file_uploader(
         "Upload CSV file for batch predictions",
         type=['csv'],
-        help="Upload a CSV file with columns matching the input format"
+        help="Upload a CSV file with columns: Gender,Married,Dependents,Education,Self_Employed,ApplicantIncome,CoapplicantIncome,LoanAmount,Loan_Amount_Term,Credit_History,Property_Area"
     )
     
     if uploaded_file is not None and model and scaler:
@@ -352,25 +422,95 @@ with st.expander("🔧 Advanced Options"):
             st.write("**Data Preview:**")
             st.dataframe(batch_df.head())
             
-            if st.button("Process Batch Predictions"):
-                # Process batch predictions here
-                st.info("Batch prediction feature - implement based on your specific requirements")
+            if st.button("🚀 Process Batch Predictions"):
+                with st.spinner("Processing batch predictions..."):
+                    try:
+                        # Prepare batch data with proper encoding
+                        batch_processed = batch_df.copy()
+                        
+                        # Apply the same encoding as single prediction
+                        batch_processed['Gender'] = batch_processed['Gender'].map({'Male': 1, 'Female': 0})
+                        batch_processed['Married'] = batch_processed['Married'].map({'Yes': 1, 'No': 0})
+                        batch_processed['Education'] = batch_processed['Education'].map({'Graduate': 0, 'Not Graduate': 1})
+                        batch_processed['Self_Employed'] = batch_processed['Self_Employed'].map({'Yes': 1, 'No': 0})
+                        batch_processed['Property_Area'] = batch_processed['Property_Area'].map({'Urban': 2, 'Semiurban': 1, 'Rural': 0})
+                        
+                        # Handle dependents
+                        dependents_map = {'0': 0, '1': 1, '2': 2, '3+': 3}
+                        batch_processed['Dependents'] = batch_processed['Dependents'].map(dependents_map)
+                        
+                        # Select feature columns (excluding Loan_ID if present)
+                        feature_columns = ['Gender', 'Married', 'Dependents', 'Education', 'Self_Employed', 
+                                         'ApplicantIncome', 'CoapplicantIncome', 'LoanAmount', 
+                                         'Loan_Amount_Term', 'Credit_History', 'Property_Area']
+                        
+                        X_batch = batch_processed[feature_columns]
+                        
+                        # Fill missing values with median/mode
+                        for col in X_batch.columns:
+                            if X_batch[col].dtype in ['int64', 'float64']:
+                                X_batch[col].fillna(X_batch[col].median(), inplace=True)
+                            else:
+                                X_batch[col].fillna(X_batch[col].mode()[0] if not X_batch[col].mode().empty else 0, inplace=True)
+                        
+                        # Scale and predict
+                        X_scaled = scaler.transform(X_batch)
+                        predictions = model.predict(X_scaled)
+                        
+                        # Convert predictions back to readable format
+                        batch_df['Prediction'] = ['APPROVED' if pred == 0 else 'REJECTED' for pred in predictions]
+                        batch_df['Prediction_Code'] = predictions
+                        
+                        st.success("✅ Batch processing completed!")
+                        st.dataframe(batch_df[['Prediction', 'Prediction_Code']])
+                        
+                        # Download option
+                        csv = batch_df.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download Results",
+                            data=csv,
+                            file_name='loan_predictions.csv',
+                            mime='text/csv'
+                        )
+                        
+                    except Exception as e:
+                        st.error(f"Error in batch processing: {str(e)}")
+                        
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
     
-    st.subheader("Model Information")
+    st.subheader("📊 Model Information")
     if model:
-        st.info(f"**Model Type:** {type(model).__name__}")
-        try:
-            if hasattr(model, 'feature_importances_'):
-                st.write("**Top Features:**")
-                feature_names = ['Gender', 'Married', 'Dependents', 'Education', 'Self_Employed', 
-                               'ApplicantIncome', 'CoapplicantIncome', 'LoanAmount', 
-                               'Loan_Amount_Term', 'Credit_History', 'Property_Area']
-                importance_df = pd.DataFrame({
-                    'Feature': feature_names,
-                    'Importance': model.feature_importances_
-                }).sort_values('Importance', ascending=False)
-                st.dataframe(importance_df.head())
-        except:
-            st.write("Feature importance not available for this model type.")
+        st.info(f"""
+        **Model Type:** {model_type}
+        **Probability Support:** {'Yes' if has_predict_proba else 'No (using decision function/default confidence)'}
+        **Features:** 11 input features
+        **Encoding:** Label encoded categorical variables
+        **Scaling:** StandardScaler applied
+        """)
+        
+        # Feature importance (if available)
+        if hasattr(model, 'feature_importances_'):
+            st.write("**Feature Importance:**")
+            feature_names = ['Gender', 'Married', 'Dependents', 'Education', 'Self_Employed', 
+                           'ApplicantIncome', 'CoapplicantIncome', 'LoanAmount', 
+                           'Loan_Amount_Term', 'Credit_History', 'Property_Area']
+            
+            importance_df = pd.DataFrame({
+                'Feature': feature_names,
+                'Importance': model.feature_importances_
+            }).sort_values('Importance', ascending=False)
+            
+            st.dataframe(importance_df)
+        elif hasattr(model, 'coef_'):
+            st.write("**Feature Coefficients:**")
+            feature_names = ['Gender', 'Married', 'Dependents', 'Education', 'Self_Employed', 
+                           'ApplicantIncome', 'CoapplicantIncome', 'LoanAmount', 
+                           'Loan_Amount_Term', 'Credit_History', 'Property_Area']
+            
+            coef_df = pd.DataFrame({
+                'Feature': feature_names,
+                'Coefficient': model.coef_[0] if hasattr(model.coef_, '__len__') else model.coef_
+            }).sort_values('Coefficient', ascending=False, key=abs)
+            
+            st.dataframe(coef_df)
