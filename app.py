@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -191,6 +190,7 @@ if submit:
     st.download_button("Download PDF Report", pdf.getvalue(),
                        file_name=f"report_{name or 'applicant'}_{datetime.datetime.now():%Y%m%d_%H%M%S}.pdf",
                        mime="application/pdf")
+
 
 
 
