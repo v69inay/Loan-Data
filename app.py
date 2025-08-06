@@ -5,9 +5,7 @@ import joblib
 from fpdf import FPDF
 from io import BytesIO
 import datetime
-import warnings
 
-warnings.filterwarnings('ignore')
 st.set_page_config(page_title="Loan Prediction App", layout="centered")
 
 # ----------------------
@@ -221,3 +219,4 @@ if model is not None and scaler is not None:
 
 else:
     st.error("Could not load model or scaler. Prediction not available.")
+
