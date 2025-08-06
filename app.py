@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 import pandas as pd
 import numpy as np 
@@ -236,3 +236,4 @@ if model and scaler:
             st.error(f"PDF generation error: {e}. Install reportlab (pip install reportlab).")
 else:
     st.error("Unable to load model files.")```
+
