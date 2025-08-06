@@ -235,5 +235,6 @@ if model and scaler:
         except Exception as e:
             st.error(f"PDF generation error: {e}. Install reportlab (pip install reportlab).")
 else:
-    st.error("Unable to load model files.")```
+    st.error("Unable to load model files.")
+
 
